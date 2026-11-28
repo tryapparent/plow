@@ -1,0 +1,24 @@
+services:
+  grafana:
+    image: ${PLOW_ACCESS_IMAGE:-plow-grafana-greenfield:local}
+    ports: !reset []
+    environment:
+      GF_SERVER_PROTOCOL: socket
+      GF_SERVER_SOCKET: /run/plow/grafana.sock
+      GF_SERVER_SOCKET_MODE: "0666"
+      GF_SERVER_ROOT_URL: https://plow.tryapparent.com/app/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-Plow-Viewer
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "false"
+      GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_SIGNOUT_REDIRECT_URL: https://plow.tryapparent.com/cdn-cgi/access/logout
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_LIVE_ALLOWED_ORIGINS: ${PLOW_TAILNET_ORIGIN:?Set the existing Tailscale HTTPS origin}
+      GF_LOG_LEVEL: warn
+    volumes:
+      - ${PLOW_LGTM_WORKDIR}/access-grafana:/run/plow
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--unix-socket", "/run/plow/grafana.sock", "http://localhost/app/api/health"]

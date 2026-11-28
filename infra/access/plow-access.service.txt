@@ -1,0 +1,15 @@
+[Unit]
+Description=Plow Grafana Access and Tailscale gateway
+After=docker.service
+
+[Service]
+EnvironmentFile=%h/.config/plow-access/runtime.env
+WorkingDirectory=%h/.config/plow-access/current/infra/access
+ExecStart=/usr/bin/node gateway.mjs
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

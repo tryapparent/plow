@@ -78,5 +78,15 @@
     "collect/github/main.ts",
     "collect/github/store.ts",
     "collect/github/history.test.ts"
+  ],
+  "Cloudflare Tunnel API, Grafana socket and Access JWT host I/O (see infra/access/README.md)": [
+    "infra/access/gateway.mjs",
+    "infra/access/cloudflare.mjs",
+    "infra/access/compose.yaml",
+    "infra/access/plow-access.service.txt",
+    "infra/access/package.json",
+    "infra/access/package-lock.json",
+    "infra/access/check.sh",
+    "infra/access/access.test.mjs"
   ]
 }
