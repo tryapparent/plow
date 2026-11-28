@@ -61,7 +61,7 @@ docker compose -p plow-grafana up -d github-collector
 
 Write the scoped credential to `github-read` in `PLOW_GITHUB_CREDENTIAL_DIR` with mode 0400 or 0600. Set the service UID and GID as seen inside the container. On Clanker's rootless Docker, `0:0` maps to the host account that owns the private runtime. The read-only directory bind lets reruns see an atomically replaced credential. Use the same overlay and persistent paths whenever reapplying the stack. For a bounded check with an isolated state directory, use `docker compose run --rm github-collector --once`.
 
-The [common Alloy configuration](../alloy/config.txt) reads the GitHub spool and indexes records at file observation time. The source and producer clocks remain in each record. Query Loki by ingest interval before applying source-time filters and event ID deduplication. A separate receiver sends health reports to the [Collection Health dashboard](../../grafana/collection-health.md). [Alloy filelog settings](https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.receiver.filelog/) · [Loki ordering limits](https://grafana.com/docs/loki/latest/configure/)
+The [common Alloy configuration](../alloy/config.txt) reads the GitHub spool and indexes records by source time when present, partitioned by UTC hour for late-arriving history. Records without a source anchor use Alloy’s observation time. Both producer clocks remain in each record. A separate receiver sends health reports to the [Collection Health dashboard](../../grafana/collection-health.md). [Alloy filelog settings](https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.receiver.filelog/) · [Loki ordering limits](https://grafana.com/docs/loki/latest/configure/)
 
 ## Verification
 

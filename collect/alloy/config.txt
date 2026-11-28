@@ -13,11 +13,15 @@ collection_health.health_self_metrics "alloy" {
 }
 
 otelcol.receiver.filelog "codex" {
-  include           = ["/spool/codex.jsonl"]
+  include           = ["/spool/codex.jsonl", "/spool/codex/*.jsonl"]
   include_file_name = false
   start_at          = "beginning"
   storage           = otelcol.storage.file.positions.handler
   resource          = { "plow_source" = "codex_history" }
+  retry_on_failure {
+    enabled          = true
+    max_elapsed_time = "0s"
+  }
   output {
     logs = [otelcol.processor.transform.transport.input]
   }
@@ -34,36 +38,35 @@ otelcol.receiver.filelog "t3" {
   }
 }
 
-otelcol.receiver.filelog "github_history" {
-  include           = ["/spool/github/*.jsonl"]
+otelcol.receiver.filelog "t3_history" {
+  include           = ["/spool/t3/*.jsonl"]
+  fingerprint_size = "128B"
   include_file_name = false
-  fingerprint_size  = "128B"
   start_at          = "beginning"
   storage           = otelcol.storage.file.positions.handler
-  resource          = { "plow_source" = "github_history" }
-
+  resource          = { "plow_source" = "t3_history" }
   retry_on_failure {
     enabled          = true
     max_elapsed_time = "0s"
   }
-
   output {
-    logs = [otelcol.processor.transform.github_history.input]
+    logs = [otelcol.processor.transform.transport.input]
   }
 }
 
-otelcol.processor.transform "github_history" {
-  error_mode = "propagate"
-
-  log_statements {
-    context = "log"
-    statements = [
-      `set(time_unix_nano, observed_time_unix_nano)`,
-    ]
+otelcol.receiver.filelog "github_history" {
+  include           = ["/spool/github/*.jsonl"]
+  fingerprint_size = "128B"
+  include_file_name = false
+  start_at          = "beginning"
+  storage           = otelcol.storage.file.positions.handler
+  resource          = { "plow_source" = "github_history" }
+  retry_on_failure {
+    enabled          = true
+    max_elapsed_time = "0s"
   }
-
   output {
-    logs = [otelcol.exporter.otlphttp.loki.input]
+    logs = [otelcol.processor.transform.transport.input]
   }
 }
 
@@ -75,7 +78,8 @@ otelcol.processor.transform "transport" {
     statements = [
       `merge_maps(cache, ParseJSON(body), "upsert")`,
       `set(time_unix_nano, Int(cache["timestampMs"]) * 1000000) where cache["timestampMs"] != nil`,
-      `set(time_unix_nano, Int(cache["run"]["completedMs"]) * 1000000) where cache["run"] != nil`,
+      `set(time_unix_nano, Int(cache["run"]["completedMs"]) * 1000000) where cache["run"] != nil and cache["timestampMs"] == nil`,
+      `set(attributes["plow_hour"], String(Int(time_unix_nano / 3600000000000))) where time_unix_nano > 0`,
       `set(attributes["event_id"], cache["eventId"])`,
       `set(attributes["call_id"], cache["callId"])`,
       `set(attributes["session_id"], cache["sessionId"])`,
@@ -84,6 +88,13 @@ otelcol.processor.transform "transport" {
     ]
   }
 
+  output {
+    logs = [otelcol.processor.groupbyattrs.event_hour.input]
+  }
+}
+
+otelcol.processor.groupbyattrs "event_hour" {
+  keys = ["plow_hour"]
   output {
     logs = [otelcol.exporter.otlphttp.loki.input]
   }

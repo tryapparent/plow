@@ -56,3 +56,8 @@ Reapply with the same runtime directory and environment to retain the volumes an
 The [GitHub collector overlay](../../collect/github/README.md#compose-deployment) adds continuous polling and historical backfill when supplied with an authorized repository configuration and credential. The [Codex trace guide](../../grafana/traces.md) describes the provisioned Tempo views and the optional fan-out from the existing Codex Collector.
 
 [Collection Health](../../grafana/collection-health.md) uses a separate Loki tenant for allowlisted progress reports and the existing Mimir data source for Alloy self-metrics.
+Activity reads evidence in bounded windows up to eight days. The single-node
+candidate splits Loki range reads by day. Hourly query splitting multiplied
+each panel's source reads into hundreds of subqueries and delayed short
+run-detail reads during range changes. The query split is independent of the
+hourly event streams used for late historical inserts.

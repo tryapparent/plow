@@ -55,3 +55,25 @@ Build the module into an existing private build directory with `node analyze/pol
 The CLI compiles the Bend2 source into an ephemeral JavaScript module using the repository's `tooling/bend.ts`. That helper needs the pinned compiler and Base library. Use a provisioned bundle selected by `PLOW_BEND_BUNDLE` or the checkout's Git compiler cache. With neither, the helper downloads the integrity-pinned bundle. A standalone greenfield package must retain or replace the compiler helper and pinned bundle, and supply a supported Node runtime for this CLI. The policy has no imports from the existing collector, SQLite evidence pipeline, or React dashboard.
 
 The two exact host exception paths are `analyze/policy/main.ts` for stdin/stdout, the JSON codec and compiler wiring, and `analyze/policy/main.test.ts` for the Node synthetic CLI integration test.
+
+## Activity range
+
+`activity.bend` admits source-scoped records, resolves replay and revisions,
+selects the T3 capture watermark, and calls the thread-span, CI, and report
+policies. The pinned compiler runs the policy through the same executable as
+the one-run query. The Node host decodes foreign JSON and serializes Bend2
+results. The Go datasource owns bounded Loki transport and Grafana data
+frames. It does not run collection or use a legacy SQLite runtime dependency.
+
+GitHub job identity is repository, run, attempt and job ID. Attempt identity
+omits the job ID. SHA must match the selected attempt for linking. Source
+clocks and collection clocks remain independent. Strong T3 run bindings are
+available to the original tool-envelope pairing policy through exact links.
+
+A read-only comparison against the legacy Activity projection at
+`2026-11-28T11:00:28.783Z` checked the provider and admission totals per
+thread. Of 327 threads present in both snapshots, 324 matched exactly.
+All seven work-share bucket values and measured-thread counts matched on
+that common thread set. The live retained projection was read later than the immutable legacy
+cutoff and could contain different revisions. The comparison does not
+establish total parity for operation labels, missing clocks or CI.

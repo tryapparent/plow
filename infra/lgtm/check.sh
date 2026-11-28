@@ -4,6 +4,7 @@ cd "$(dirname -- "${BASH_SOURCE[0]}")/../.."
 export PLOW_LGTM_WORKDIR
 PLOW_LGTM_WORKDIR=$(mktemp -d /tmp/apparent-dev-plow-lgtm-XXXXXX)
 job=${PLOW_LGTM_WORKDIR##*-}
+export PLOW_GRAFANA_IMAGE="plow-grafana-check-${job,,}:local"
 compose() { docker compose -p "plow-lgtm-${job,,}" "$@"; }
 cleanup() {
   status=$?
@@ -174,3 +175,56 @@ node verify/grafana-mcp.ts "http://$grafana" "$PLOW_LGTM_WORKDIR/mcp-token" \
   "$PLOW_LGTM_WORKDIR/query.json" "$PLOW_LGTM_WORKDIR/analysis.json" "$PLOW_LGTM_WORKDIR/mcp.json"
 unlink "$PLOW_LGTM_WORKDIR/mcp-token"
 printf 'Verified Grafana analysis, replay, Tempo traces, Mimir metrics, and Grafana MCP. Evidence: %s\n' "$PLOW_LGTM_WORKDIR"
+
+mkdir -p "$PLOW_LGTM_WORKDIR/spool/t3"
+end_ms=$(( $(date +%s) * 1000 - 1000 ))
+start_ms=$(( end_ms - 86400000 ))
+old_ms=$(( end_ms - 3 * 86400000 ))
+jq -nc --argjson end "$end_ms" '
+  {kind:"t3_coverage",eventId:"activity-checkpoint",timestampMs:$end,observedMs:$end,status:"idle"}
+' > "$PLOW_LGTM_WORKDIR/spool/t3/current.jsonl"
+activity_selector='{plow_source="t3_history"}'
+activity_loki() {
+  curl -fsSG --max-time 6 -H 'X-Scope-OrgID: plow-fixture' -H 'X-Loki-Response-Encoding-Flags: categorize-labels' \
+    --data-urlencode "query=$activity_selector" --data-urlencode "start=${old_ms}000000" \
+    --data-urlencode "end=$((end_ms + 1))000000" "http://$loki/loki/api/v1/query_range"
+}
+await_activity() {
+  local predicate=$1 file=$2
+  for ((attempt=0; attempt<15; attempt++)); do
+    if activity_loki > "$file" && jq -e "$predicate" "$file" >/dev/null; then return; fi
+    sleep 1
+  done
+  return 1
+}
+await_activity '([.data.result[].values[]]|length)==1' "$PLOW_LGTM_WORKDIR/activity-current.json"
+jq -nc --argjson old "$old_ms" --argjson end "$end_ms" '
+  def run($id;$thread;$r;$s;$e): {kind:"t3_activity_run",eventId:$id,timestampMs:$e,revisionMs:$e,observedMs:$end,
+    run:{id:$id,threadId:$thread,sessionId:"",requestedMs:$r,startedMs:$s,completedMs:$e}};
+  run("old";"other";$old - 9000;$old - 5000;$old),
+  run("recent";"thread-a";$end - 3604000;$end - 3602000;$end - 3600000)
+' > "$PLOW_LGTM_WORKDIR/activity-runs.jsonl"
+cp "$PLOW_LGTM_WORKDIR/activity-runs.jsonl" "$PLOW_LGTM_WORKDIR/spool/t3/range.jsonl"
+await_activity '([.data.result[].values[]]|length)==3' "$PLOW_LGTM_WORKDIR/activity-loki.json"
+jq -e '([.data.result[].values[]]|length) == 3 and (.data.result|length)==3 and
+  all(.data.result[]; .stream.plow_hour as $hour | all(.values[]; (.[0]|tonumber/3600000000000|floor|tostring)==$hour))' \
+  "$PLOW_LGTM_WORKDIR/activity-loki.json"
+grafana_api dashboards/uid/plow-activity > "$PLOW_LGTM_WORKDIR/activity-dashboard.json"
+jq -c --arg from "$start_ms" --arg to "$end_ms" '
+  {from:$from,to:$to,queries:[.dashboard.panels[].targets[]? | select(.activityView) |
+    . + {refId:.activityView,range:"24h",operation:"all"}]}
+' "$PLOW_LGTM_WORKDIR/activity-dashboard.json" > "$PLOW_LGTM_WORKDIR/activity-query.json"
+activity_query() {
+  grafana_post ds/query "$(cat "$PLOW_LGTM_WORKDIR/activity-query.json")"
+}
+activity_query > "$PLOW_LGTM_WORKDIR/activity.json"
+jq -e 'all(.results[]; .status==200) and
+  ([.results.share.frames[0].data.values[1][]] | map(select(. == null)) | length) == 5 and
+  ([.results.timeline.frames[].schema.name] == ["thread-a"])' "$PLOW_LGTM_WORKDIR/activity.json"
+umask 077
+grafana_post "serviceaccounts/$account/tokens" '{"name":"activity-verification","secondsToLive":300}' |
+  jq -er .key > "$PLOW_LGTM_WORKDIR/mcp-token"
+node verify/grafana-mcp.ts "http://$grafana" "$PLOW_LGTM_WORKDIR/mcp-token" \
+  "$PLOW_LGTM_WORKDIR/activity-query.json" "$PLOW_LGTM_WORKDIR/activity.json" "$PLOW_LGTM_WORKDIR/activity-mcp.json"
+unlink "$PLOW_LGTM_WORKDIR/mcp-token"
+printf 'Verified Activity frames, source-hour ordering, and Grafana MCP. Evidence: %s\n' "$PLOW_LGTM_WORKDIR"

@@ -1,6 +1,43 @@
+x-capture: &capture
+  image: ${PLOW_CAPTURE_IMAGE:-plow-capture:local}
+  build:
+    context: ../..
+    dockerfile: infra/lgtm/grafana.Dockerfile
+    target: capture
+  restart: ${PLOW_LGTM_RESTART:-no}
+
+x-codex-capture: &codex-capture
+  <<: *capture
+  profiles: [capture-codex]
+  environment:
+    PLOW_CAPTURE_SCOPE: ${PLOW_CODEX_SCOPE:-}
+    PLOW_CAPTURE_STATE: /state
+    PLOW_CAPTURE_SPOOL: /spool
+    PLOW_CODEX_ROOTS: /input/sessions:/input/archives
+  volumes:
+    - ${PLOW_LGTM_WORKDIR:?Set a private fixture work directory}/spool:/spool
+    - capture-state:/state
+    - ${PLOW_CODEX_SESSIONS:-/dev/null}:/input/sessions:ro
+    - ${PLOW_CODEX_ARCHIVES:-/dev/null}:/input/archives:ro
+
+x-t3-capture: &t3-capture
+  <<: *capture
+  profiles: [capture-t3]
+  network_mode: ${PLOW_T3_NETWORK_MODE:-bridge}
+  environment:
+    PLOW_CAPTURE_SCOPE: ${PLOW_T3_SCOPE:-}
+    PLOW_CAPTURE_STATE: /state
+    PLOW_CAPTURE_SPOOL: /spool
+    PLOW_T3_ORIGIN: ${PLOW_T3_ORIGIN:-}
+    PLOW_T3_READ_TOKEN_FILE: /run/plow-t3-bearer
+  volumes:
+    - ${PLOW_LGTM_WORKDIR:?Set a private fixture work directory}/spool:/spool
+    - capture-state:/state
+    - ${PLOW_T3_READ_TOKEN_FILE:-/dev/null}:/run/plow-t3-bearer:ro
+
 services:
   grafana:
-    image: plow-grafana-greenfield:local
+    image: ${PLOW_GRAFANA_IMAGE:-plow-grafana-greenfield:local}
     build:
       context: ../..
       dockerfile: infra/lgtm/grafana.Dockerfile
@@ -30,7 +67,6 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ../../grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../../grafana/dashboards:/var/lib/grafana/dashboards:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
       interval: 3s
@@ -83,6 +119,19 @@ services:
       - ../../collect/alloy/collection-health.txt:/etc/alloy/collection-health.alloy:ro
       - ${PLOW_LGTM_WORKDIR:?Set a private fixture work directory}/spool:/spool:ro
       - alloy-data:/var/lib/alloy
+  codex-live:
+    <<: *codex-capture
+    command: ["node", "collect/fixture.ts", "--capture", "live"]
+  codex-backfill:
+    <<: *codex-capture
+    command: ["node", "collect/fixture.ts", "--capture", "backfill"]
+  t3-live:
+    <<: *t3-capture
+    command: ["node", "collect/t3/read.ts", "--capture", "live"]
+  t3-backfill:
+    <<: *t3-capture
+    command: ["node", "collect/t3/read.ts", "--capture", "backfill"]
+
 secrets:
   grafana_password:
     file: ${PLOW_LGTM_WORKDIR:?Set a private fixture work directory}/grafana-password
@@ -90,5 +139,6 @@ volumes:
   grafana-data:
   loki-data:
   alloy-data:
+  capture-state:
   tempo-data:
   mimir-data:

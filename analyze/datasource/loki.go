@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 )
@@ -85,12 +86,20 @@ func (l lokiClient) readEvents(ctx context.Context, window backend.TimeRange, se
 }
 
 func (l lokiClient) read(ctx context.Context, window backend.TimeRange, query, source string, limit int) ([]string, []string, *backend.DataResponse) {
+	return l.readDirection(ctx, window, query, source, limit, false)
+}
+
+func (l lokiClient) readDirection(ctx context.Context, window backend.TimeRange, query, source string, limit int, latest bool) ([]string, []string, *backend.DataResponse) {
 	endpoint := *l.endpoint
 	params := endpoint.Query()
 	params.Set("query", query)
 	params.Set("start", strconv.FormatInt(window.From.UnixNano(), 10))
 	params.Set("end", strconv.FormatInt(window.To.UnixNano()+1, 10))
-	params.Set("direction", "forward")
+	if latest {
+		params.Set("direction", "backward")
+	} else {
+		params.Set("direction", "forward")
+	}
 	params.Set("limit", strconv.Itoa(limit))
 	endpoint.RawQuery = params.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
@@ -98,6 +107,7 @@ func (l lokiClient) read(ctx context.Context, window backend.TimeRange, query, s
 		return nil, nil, lokiFailure(backend.StatusInternal, "Could not build the Loki request")
 	}
 	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-Loki-Response-Encoding-Flags", "categorize-labels")
 	request.Header.Set("X-Scope-OrgID", l.tenant)
 	if l.token != "" {
 		request.Header.Set("Authorization", "Bearer "+l.token)
@@ -162,7 +172,7 @@ func (l lokiClient) read(ctx context.Context, window backend.TimeRange, query, s
 			lines = append(lines, line)
 		}
 	}
-	if len(lines) == limit {
+	if !latest && len(lines) == limit {
 		gaps = append(gaps, "Loki entry limit reached. Narrow the time range")
 	}
 	if len(payload.Warnings) != 0 {
@@ -186,4 +196,38 @@ func lokiTransportFailure(err error) *backend.DataResponse {
 	default:
 		return lokiFailure(backend.StatusBadGateway, "Loki request failed. Check the configured endpoint")
 	}
+}
+
+func (ds *datasource) readHistoryRun(ctx context.Context, window backend.TimeRange, id string) (runRecord, *backend.DataResponse) {
+	selector := `{plow_source="t3_history"} | json plow_kind="kind", plow_run_id="run.id" | plow_kind="t3_activity_run" | plow_run_id=` + strconv.Quote(id)
+	lines, gaps, failure := ds.loki.read(ctx, window, selector, "t3_history", runLimit)
+	if failure != nil {
+		return runRecord{}, failure
+	}
+	if len(gaps) != 0 {
+		return runRecord{}, lokiFailure(backend.StatusBadGateway, "Incomplete T3 history lookup")
+	}
+	raw, failure := runPolicy(ctx, ds.policy, map[string]any{
+		"range": "24h", "view": "lookup", "to": time.Now().UnixMilli(),
+		"records": map[string][]string{"t3_history": lines},
+	})
+	if failure != nil {
+		return runRecord{}, failure
+	}
+	var rows []struct {
+		Thread  string
+		Run     string
+		Session string
+		Start   *int64
+		End     *int64
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return runRecord{}, policyFailure(backend.StatusInternal, "Invalid T3 history result")
+	}
+	if len(rows) != 1 || rows[0].Run != id || !identifier.MatchString(rows[0].Session) ||
+		rows[0].Start == nil || rows[0].End == nil || *rows[0].Start == 0 || *rows[0].End == 0 {
+		return runRecord{}, lokiFailure(backend.StatusNotFound, "No unambiguous, strongly bound run in this time range")
+	}
+	row := rows[0]
+	return runRecord{ID: row.Run, ThreadID: row.Thread, SessionID: row.Session, StartedMS: row.Start, CompletedMS: row.End}, nil
 }

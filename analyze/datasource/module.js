@@ -8,6 +8,7 @@ System.register(['react', '@grafana/data', '@grafana/runtime', '@grafana/ui'], f
 
   function QueryEditor({ query, onChange, onRunQuery }) {
     const inputId = React.useId();
+    if (query.activityView) return React.createElement('span', null, 'Activity · ' + query.activityView);
     return React.createElement(
       InlineField,
       { label: 'Run ID', htmlFor: inputId, grow: true, required: true },
@@ -43,7 +44,13 @@ System.register(['react', '@grafana/data', '@grafana/runtime', '@grafana/ui'], f
     execute() {
       class DataSource extends DataSourceWithBackend {
         applyTemplateVariables(query, scopedVars) {
-          return { ...query, runId: getTemplateSrv().replace(query.runId ?? '', scopedVars) };
+          const template = getTemplateSrv();
+          if (query.activityView) return {
+            ...query,
+            range: template.replace(query.range ?? '', scopedVars),
+            operation: template.replace(query.operation ?? '', scopedVars),
+          };
+          return { ...query, runId: template.replace(query.runId ?? '', scopedVars), history: template.replace(query.history ?? '', scopedVars) };
         }
       }
 

@@ -78,7 +78,7 @@ def rollout(+session: String, envelope: String, kind: String, +metadata_id: Stri
     case _: Step{session, ""}
 
 type T3Binding is Data:
-  T3Binding{owner: String, driver: String, native_driver: String, strength: String, session: String}
+  T3Binding{owner: String, driver: String, native_driver: String, strength: String, session: String, reference: String}
 
 type T3Run is Data:
   T3Run{owner: String, id: String, started: String, completed: String}
@@ -97,7 +97,7 @@ def select(matches: Bool, found: Choice, value: String) -> Choice:
 def binding(+thread: String, refs: List<&2, T3Binding>, found: Choice) -> Choice:
   match refs:
     case []: found
-    case T3Binding{owner, driver, native_driver, strength, +session} <> rest:
+    case T3Binding{owner, driver, native_driver, strength, +session, _} <> rest:
       +matches = Bool.and(String.eq(owner, thread), Bool.and(String.eq(driver, "codex"),
         Bool.and(String.eq(native_driver, "codex"), Bool.and(String.eq(strength, "strong"), token(session)))))
       binding(thread, rest, select(matches, found, session))

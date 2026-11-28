@@ -28,6 +28,7 @@ schema_config:
         prefix: index_
         period: 24h
 limits_config:
+  split_queries_by_interval: 24h
   reject_old_samples: false
   allow_structured_metadata: true
   otlp_config:
@@ -35,4 +36,4 @@ limits_config:
       ignore_defaults: true
       attributes_config:
         - action: index_label
-          attributes: [plow_source]
+          attributes: [plow_source, plow_hour]

@@ -116,3 +116,63 @@ test("round-trips signed millisecond clocks and rejects invalid run windows", ()
   assert.equal(invalid.stdout, "");
   assert.match(invalid.stderr, /Policy rejected the run identity or clock window/);
 });
+
+test("Activity clips and disjoins threads, preserves cross-thread time, and leaves empty buckets null", () => {
+  const hour = 3_600_000;
+  const to = epoch + 100 * hour;
+  const at = (hours: number) => to - hours * hour;
+  function record(id: string, thread: string, request: number, start: number | null, end: number | null, session = "") {
+    return { kind: "t3_activity_run", eventId: id, timestampMs: end ?? start ?? request,
+      observedMs: to, revisionMs: end ?? start ?? request,
+      run: { id, threadId: thread, sessionId: session, requestedMs: request, startedMs: start, completedMs: end } };
+  }
+  const rows = [
+    record("a", "t1", at(26), at(25), at(22), "exact-session"),
+    record("b", "t1", at(23), at(21), at(20)),
+    record("c", "t2", at(24), at(23), at(20)),
+    record("d", "t1", at(12), null, at(11)),
+    { kind: "operation", eventId: "safe", threadId: "t1", t3RunId: "a", operation: "command_execution",
+      timestampMs: at(22.5), startedMs: at(23), completedMs: at(22.5), observedMs: to },
+    { kind: "operation", eventId: "unsafe", threadId: "t1", t3RunId: "a", operation: "private fixture text",
+      timestampMs: at(23), startedMs: at(24), completedMs: at(23), observedMs: to },
+    { kind: "t3_coverage", eventId: "checkpoint", timestampMs: to, status: "idle", observedMs: to },
+  ];
+  const ci = { repository: "fixture/repo", runId: 4, attempt: 2, headSha: "a".repeat(40), observedMs: to };
+  const link = { kind: "t3_pr_link", eventId: "link", threadId: "t1", repository: ci.repository,
+    prNumber: "42", timestampMs: at(12) };
+  const workflow = { ...ci, kind: "github_actions_attempt", eventId: "attempt", prNumber: "42", timestampMs: at(10),
+    createdMs: at(14), startedMs: at(13), completedMs: at(10) };
+  const job = { ...ci, kind: "github_actions_job", eventId: "job-a", jobId: 11, timestampMs: at(10),
+    createdMs: at(13), executionStartedMs: at(12), executionCompletedMs: at(10), conclusion: "failure" };
+  const newer = record("d", "t1", at(12), at(11.5), at(11));
+  newer.revisionMs++;
+  newer.observedMs = to + 1;
+  function activity(input: unknown[], range: string, operation = "all") {
+    const result = execute({ to, range, operation, records: {
+      t3_history: input.map(item => JSON.stringify(item)),
+      github_history: [workflow, job, { ...job, eventId: "prior-job-a", observedMs: to - 1,
+        executionStartedMs: at(13) }, { ...job, eventId: "job-b", jobId: 12, headSha: "b".repeat(40) }].map(item => JSON.stringify(item)),
+    } });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  }
+  const input = [...rows, link, newer];
+  const output = activity(input, "24h");
+  const result = JSON.parse(output);
+  assert.equal(result.cutoff, to);
+  assert.equal(result.from, at(24));
+  assert.equal(result.links[0].first, at(25));
+  assert.equal(result.unknownRuns, 1);
+  assert.equal(result.buckets[0].share, 7500);
+  assert.equal(result.buckets.at(-1).share, null);
+  assert.equal(result.ci.length, 2);
+  assert.equal(result.findings.find((finding: { kind: string }) => finding.kind === "CI failures").ms, 2 * hour);
+  assert.ok(result.totals.some((row: { operation: string; ms: number }) => row.operation === "Command execution" && row.ms === hour / 2));
+  assert.ok(result.totals.some((row: { operation: string; ms: number }) => row.operation === "Missing clocks" && row.ms === hour));
+  assert.doesNotMatch(output, /private fixture text/);
+  assert.deepEqual(JSON.parse(activity(input, "24h", "Command execution")).threads.map((lane: { id: string }) => lane.id), ["t1"]);
+  const days = JSON.parse(activity(input, "7d")).buckets;
+  assert.equal(days.length, 7);
+  assert.equal(days[1].time - days[0].time, 24 * hour);
+  assert.equal(activity([...input, ...input].reverse(), "24h"), output);
+});
